@@ -245,4 +245,192 @@ function sync(mongodbConfig, s3Config, callback) {
   });
 }
 
-module.exports = { sync: sync, log: log };
+/**
+ * getFromS3
+ *
+ * get a file from S3.
+ *
+ * @param s3Config   s3 config [key, secret, bucket]
+ * @param target    file  to download
+ * @param destination   path to local file to save archive
+ * @param callback  callback(err)
+ */
+function getFromS3(s3config, target, destination, callback) {
+    var knox = require('knox')
+    , fs = require("fs")
+    , s3client;
+
+
+    callback = callback || function() { };
+
+    s3client = knox.createClient({
+        key: s3config.key,
+        secret: s3config.secret,
+        bucket: s3config.bucket
+    });
+
+    log("Attempting to download "+ target + " from " + " bucket " + s3config.bucket);
+    s3client.getFile(target, function(err, res) {
+        if (err) {
+            log((err));
+            return callback(new Error('Error when downloading', err));
+        }
+        log("Status ", res.statusCode);
+
+        log("SAVING FILE to"+ destination);
+
+        res.on("data", function(chunk) {
+            log("bytes received ", chunk.length);
+        });
+
+        fs.mkdir(destination.replace(target, ''), function(err) {
+            if (err) {
+                log("Error in getFromS3: "+err, 'error');
+            }
+        });
+        var saveFile = fs.createWriteStream(destination);
+        res.pipe(saveFile);
+
+        res.on("end", function(chunk) {
+            if (res.statusCode !== 200) {
+                return callback(new Error('Expected a 200 response from S3, got ' + res.statusCode));
+            }
+            log("FILE FULLY DOWNLOADED");
+        });
+
+        saveFile.on("close", function(chunk) {
+             log("FILE FULLY WRITTEN TO DISK");
+            saveFile.close();
+            return callback(null);
+        });
+    });
+}
+
+/**
+ * uncompressArchive
+ *
+ * Uncompress the archive downloaded from S3.
+ *
+ * @param input     path to input archive
+ * @param output     path to output directory
+ * @param callback   callback(err)
+ */
+function uncompressArchive(input, output, callback) {
+    var tar
+    , tarOptions;
+
+    callback = callback || function() { };
+
+    tarOptions = [
+        '-zxvf',
+        input
+    ];
+
+    log('Starting decompression of ' + input + ' into ' + output, 'info');
+    tar = spawn('tar', tarOptions, {cwd: output});
+
+
+    tar.stdout.on('data', function(data) {
+        log(data);
+    });
+
+    tar.stderr.on('data', function (data) {
+        log(data, 'error');
+    });
+
+    tar.on('exit', function (code) {
+        if(code === 0) {
+            log('successfully uncompressed archive', 'info');
+            callback(null);
+        } else {
+            callback(new Error("Tar exited with code " + code));
+        }
+    });
+}
+
+
+
+/**
+ * mongoRestore
+ *
+ * Calls mongoRestore on a specified backup.
+ *
+ * @param options    MongoDB connection options [host, port, username, password, db]
+ * @param directory  Directory to dump the database to
+ * @param callback   callback(err)
+ */
+function mongoRestore(options, backupDir, callback) {
+    var mongodump
+    , mongoOptions;
+
+    callback = callback || function() { };
+
+    mongoOptions= [
+        '-h', options.host + ':' + options.port,
+        '-d', options.db,
+        '--drop',
+        backupDir
+    ];
+    if(options.username && options.password) {
+        mongoOptions.push('-u');
+        mongoOptions.push(options.username);
+
+        mongoOptions.push('-p');
+        mongoOptions.push(options.password);
+    }
+
+    log('Starting mongorestore of ' + options.db, 'info');
+    mongodump = spawn('mongorestore', mongoOptions);
+
+    mongodump.stdout.on('data', function (data) {
+        log(data);
+    });
+
+    mongodump.stderr.on('data', function (data) {
+        log(data, 'error');
+    });
+
+    mongodump.on('exit', function (code) {
+        if(code === 0) {
+            log('mongorestore executed successfully', 'info');
+            callback(null);
+        } else {
+            callback(new Error("Mongorestore exited with code " + code));
+        }
+    });
+}
+
+/**
+ * sync
+ *
+ * Performs a mongodump on a specified database, gzips the data,
+ * and uploads it to s3.
+ *
+ * @param mongodbConfig   mongodb config [host, port, username, password, db]
+ * @param s3Config        s3 config [key, secret, bucket]
+ * @param callback        callback(err)
+ */
+function restoreFromS3(mongodbConfig, s3Config, remoteFilename, callback) {
+    var tmpDir = path.join(require('os').tmpDir(), 'mongodb_s3_backup')
+    , backupDir = path.join(tmpDir, mongodbConfig.db)
+    , uncompressedDirName = mongodbConfig.db
+    , async = require('async');
+
+    callback = callback || function() { };
+
+    async.series([
+        async.apply(removeRF, tmpDir),
+        async.apply(getFromS3, s3Config, remoteFilename, path.join(tmpDir, remoteFilename)),
+        async.apply(uncompressArchive, path.join(tmpDir, remoteFilename), tmpDir ),
+        async.apply(mongoRestore, mongodbConfig, backupDir)
+    ], function(err) {
+        if(err) {
+            log(err, 'error');
+        } else {
+            log('Successfully Restored ' + mongodbConfig.db);
+        }
+        return callback(err);
+    });
+}
+
+module.exports = { sync: sync, log: log, restore: restoreFromS3 };
