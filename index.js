@@ -25,7 +25,7 @@ function log(message, tag) {
     info: color.cyanBright
   };
 
-  currentTag = tags[tag] || function(str) { return str; };
+  currentTag = tags[tag] || function (str) { return str; };
   util.log((currentTag("[" + tag + "] ") + message).replace(/(\n|\r|\r\n)$/, ''));
 }
 
@@ -61,14 +61,14 @@ function getArchiveName(databaseName) {
 function removeRF(target, callback) {
   var fs = require('fs');
 
-  callback = callback || function() { };
+  callback = callback || function () { };
 
-  fs.exists(target, function(exists) {
+  fs.exists(target, function (exists) {
     if (!exists) {
       return callback(null);
     }
     log("Removing " + target, 'warn');
-    exec( 'rm -rf ' + target, callback);
+    exec('rm -rf ' + target, callback);
   });
 }
 
@@ -85,15 +85,15 @@ function mongoDump(options, directory, callback) {
   var mongodump
     , mongoOptions;
 
-  callback = callback || function() { };
+  callback = callback || function () { };
 
-  mongoOptions= [
+  mongoOptions = [
     '-h', options.host + ':' + options.port,
     '-d', options.db,
     '-o', directory
   ];
 
-  if(options.username && options.password) {
+  if (options.username && options.password) {
     mongoOptions.push('-u');
     mongoOptions.push(options.username);
 
@@ -113,7 +113,7 @@ function mongoDump(options, directory, callback) {
   });
 
   mongodump.on('exit', function (code) {
-    if(code === 0) {
+    if (code === 0) {
       log('mongodump executed successfully', 'info');
       callback(null);
     } else {
@@ -136,7 +136,7 @@ function compressDirectory(directory, input, output, callback) {
   var tar
     , tarOptions;
 
-  callback = callback || function() { };
+  callback = callback || function () { };
 
   tarOptions = [
     '-zcf',
@@ -152,7 +152,7 @@ function compressDirectory(directory, input, output, callback) {
   });
 
   tar.on('exit', function (code) {
-    if(code === 0) {
+    if (code === 0) {
       log('successfully compress directory', 'info');
       callback(null);
     } else {
@@ -177,7 +177,7 @@ function sendToS3(options, directory, target, callback) {
     , s3client
     , destination = options.destination || '/';
 
-  callback = callback || function() { };
+  callback = callback || function () { };
 
   s3client = knox.createClient({
     key: options.key,
@@ -186,22 +186,22 @@ function sendToS3(options, directory, target, callback) {
   });
 
   log('Attemping to upload ' + target + ' to the ' + options.bucket + ' s3 bucket');
-  s3client.putFile(sourceFile, path.join(destination, target),  function(err, res){
-    if(err) {
+  s3client.putFile(sourceFile, path.join(destination, target), function (err, res) {
+    if (err) {
       return callback(err);
     }
 
     res.setEncoding('utf8');
 
-    res.on('data', function(chunk){
-      if(res.statusCode !== 200) {
+    res.on('data', function (chunk) {
+      if (res.statusCode !== 200) {
         log(chunk, 'error');
       } else {
         log(chunk);
       }
     });
 
-    res.on('end', function(chunk) {
+    res.on('end', function (chunk) {
       if (res.statusCode !== 200) {
         return callback(new Error('Expected a 200 response from S3, got ' + res.statusCode));
       }
@@ -227,7 +227,7 @@ function sync(mongodbConfig, s3Config, callback) {
     , archiveName = getArchiveName(mongodbConfig.db)
     , async = require('async');
 
-  callback = callback || function() { };
+  callback = callback || function () { };
 
   async.series([
     async.apply(removeRF, backupDir),
@@ -235,8 +235,8 @@ function sync(mongodbConfig, s3Config, callback) {
     async.apply(mongoDump, mongodbConfig, tmpDir),
     async.apply(compressDirectory, tmpDir, mongodbConfig.db, archiveName),
     async.apply(sendToS3, s3Config, tmpDir, archiveName)
-  ], function(err) {
-    if(err) {
+  ], function (err) {
+    if (err) {
       log(err, 'error');
     } else {
       log('Successfully backed up ' + mongodbConfig.db);
@@ -256,54 +256,56 @@ function sync(mongodbConfig, s3Config, callback) {
  * @param callback  callback(err)
  */
 function getFromS3(s3config, target, destination, callback) {
-    var knox = require('knox')
+  var knox = require('knox')
     , fs = require("fs")
     , s3client;
 
 
-    callback = callback || function() { };
+  var directory = path.dirname(destination);
+  exec('mkdir -p ' + directory, function (e) {
+    if (e) {
+      return callback(e);
+    }
+
+    callback = callback || function () { };
 
     s3client = knox.createClient({
-        key: s3config.key,
-        secret: s3config.secret,
-        bucket: s3config.bucket
+      key: s3config.key,
+      secret: s3config.secret,
+      bucket: s3config.bucket
     });
 
-    log("Attempting to download "+ target + " from " + " bucket " + s3config.bucket);
-    s3client.getFile(target, function(err, res) {
-        if (err) {
-            log((err));
-            return callback(new Error('Error when downloading', err));
+    log("Attempting to download " + target + " from " + " bucket " + s3config.bucket);
+    s3client.getFile(target, function (err, res) {
+      if (err) {
+        log((err));
+        return callback(new Error('Error when downloading', err));
+      }
+      log("Status ", res.statusCode);
+
+      log("SAVING FILE to" + destination);
+
+      res.on("data", function (chunk) {
+        log("bytes received ", chunk.length);
+      });
+
+      var saveFile = fs.createWriteStream(destination);
+      res.pipe(saveFile);
+
+      res.on("end", function (chunk) {
+        if (res.statusCode !== 200) {
+          return callback(new Error('Expected a 200 response from S3, got ' + res.statusCode));
         }
-        log("Status ", res.statusCode);
+        log("FILE FULLY DOWNLOADED");
+      });
 
-        log("SAVING FILE to"+ destination);
-
-        res.on("data", function(chunk) {
-            log("bytes received ", chunk.length);
-        });
-
-        fs.mkdir(destination.replace(target, ''), function(err) {
-            if (err) {
-                log("Error in getFromS3: "+err, 'error');
-            }
-        });
-        var saveFile = fs.createWriteStream(destination);
-        res.pipe(saveFile);
-
-        res.on("end", function(chunk) {
-            if (res.statusCode !== 200) {
-                return callback(new Error('Expected a 200 response from S3, got ' + res.statusCode));
-            }
-            log("FILE FULLY DOWNLOADED");
-        });
-
-        saveFile.on("close", function(chunk) {
-             log("FILE FULLY WRITTEN TO DISK");
-            saveFile.close();
-            return callback(null);
-        });
+      saveFile.on("close", function (chunk) {
+        log("FILE FULLY WRITTEN TO DISK");
+        saveFile.close();
+        return callback(null);
+      });
     });
+  });
 }
 
 /**
@@ -316,36 +318,36 @@ function getFromS3(s3config, target, destination, callback) {
  * @param callback   callback(err)
  */
 function uncompressArchive(input, output, callback) {
-    var tar
+  var tar
     , tarOptions;
 
-    callback = callback || function() { };
+  callback = callback || function () { };
 
-    tarOptions = [
-        '-zxvf',
-        input
-    ];
+  tarOptions = [
+    '-zxvf',
+    input
+  ];
 
-    log('Starting decompression of ' + input + ' into ' + output, 'info');
-    tar = spawn('tar', tarOptions, {cwd: output});
+  log('Starting decompression of ' + input + ' into ' + output, 'info');
+  tar = spawn('tar', tarOptions, { cwd: output });
 
 
-    tar.stdout.on('data', function(data) {
-        log(data);
-    });
+  tar.stdout.on('data', function (data) {
+    log(data);
+  });
 
-    tar.stderr.on('data', function (data) {
-        log(data, 'error');
-    });
+  tar.stderr.on('data', function (data) {
+    log(data, 'error');
+  });
 
-    tar.on('exit', function (code) {
-        if(code === 0) {
-            log('successfully uncompressed archive', 'info');
-            callback(null);
-        } else {
-            callback(new Error("Tar exited with code " + code));
-        }
-    });
+  tar.on('exit', function (code) {
+    if (code === 0) {
+      log('successfully uncompressed archive', 'info');
+      callback(null);
+    } else {
+      callback(new Error("Tar exited with code " + code));
+    }
+  });
 }
 
 
@@ -360,44 +362,44 @@ function uncompressArchive(input, output, callback) {
  * @param callback   callback(err)
  */
 function mongoRestore(options, backupDir, callback) {
-    var mongodump
+  var mongodump
     , mongoOptions;
 
-    callback = callback || function() { };
+  callback = callback || function () { };
 
-    mongoOptions= [
-        '-h', options.host + ':' + options.port,
-        '-d', options.db,
-        '--drop',
-        backupDir
-    ];
-    if(options.username && options.password) {
-        mongoOptions.push('-u');
-        mongoOptions.push(options.username);
+  mongoOptions = [
+    '-h', options.host + ':' + options.port,
+    '-d', options.db,
+    '--drop',
+    backupDir
+  ];
+  if (options.username && options.password) {
+    mongoOptions.push('-u');
+    mongoOptions.push(options.username);
 
-        mongoOptions.push('-p');
-        mongoOptions.push(options.password);
+    mongoOptions.push('-p');
+    mongoOptions.push(options.password);
+  }
+
+  log('Starting mongorestore of ' + options.db, 'info');
+  mongodump = spawn('mongorestore', mongoOptions);
+
+  mongodump.stdout.on('data', function (data) {
+    log(data);
+  });
+
+  mongodump.stderr.on('data', function (data) {
+    log(data, 'error');
+  });
+
+  mongodump.on('exit', function (code) {
+    if (code === 0) {
+      log('mongorestore executed successfully', 'info');
+      callback(null);
+    } else {
+      callback(new Error("Mongorestore exited with code " + code));
     }
-
-    log('Starting mongorestore of ' + options.db, 'info');
-    mongodump = spawn('mongorestore', mongoOptions);
-
-    mongodump.stdout.on('data', function (data) {
-        log(data);
-    });
-
-    mongodump.stderr.on('data', function (data) {
-        log(data, 'error');
-    });
-
-    mongodump.on('exit', function (code) {
-        if(code === 0) {
-            log('mongorestore executed successfully', 'info');
-            callback(null);
-        } else {
-            callback(new Error("Mongorestore exited with code " + code));
-        }
-    });
+  });
 }
 
 /**
@@ -411,26 +413,26 @@ function mongoRestore(options, backupDir, callback) {
  * @param callback        callback(err)
  */
 function restoreFromS3(mongodbConfig, s3Config, remoteFilename, callback) {
-    var tmpDir = path.join(require('os').tmpDir(), 'mongodb_s3_backup')
+  var tmpDir = path.join(require('os').tmpDir(), 'mongodb_s3_backup')
     , backupDir = path.join(tmpDir, mongodbConfig.db)
     , uncompressedDirName = mongodbConfig.db
     , async = require('async');
 
-    callback = callback || function() { };
+  callback = callback || function () { };
 
-    async.series([
-        async.apply(removeRF, tmpDir),
-        async.apply(getFromS3, s3Config, remoteFilename, path.join(tmpDir, remoteFilename)),
-        async.apply(uncompressArchive, path.join(tmpDir, remoteFilename), tmpDir ),
-        async.apply(mongoRestore, mongodbConfig, backupDir)
-    ], function(err) {
-        if(err) {
-            log(err, 'error');
-        } else {
-            log('Successfully Restored ' + mongodbConfig.db);
-        }
-        return callback(err);
-    });
+  async.series([
+    async.apply(removeRF, tmpDir),
+    async.apply(getFromS3, s3Config, remoteFilename, path.join(tmpDir, remoteFilename)),
+    async.apply(uncompressArchive, path.join(tmpDir, remoteFilename), tmpDir),
+    async.apply(mongoRestore, mongodbConfig, backupDir)
+  ], function (err) {
+    if (err) {
+      log(err, 'error');
+    } else {
+      log('Successfully Restored ' + mongodbConfig.db);
+    }
+    return callback(err);
+  });
 }
 
 module.exports = { sync: sync, log: log, restore: restoreFromS3 };
